@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+
+# 虚拟环境
+.venv/
+venv/
+
+# 本地数据（不要打入镜像）
+data/
+uploads/
+logs/
+volumes/
+
+# 开发文件
+.pytest_cache/
+*.log
+*.txt
+test_*.py
+locustfile.py
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# 文档
+DESIGN.md
+IDEMPOTENCY.md
+README.md
+DEPLOY.md
+mcp_servers/README.md

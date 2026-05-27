@@ -1,0 +1,34 @@
+# ============================================
+# Caddy 反向代理配置
+# 自动申请和续期 SSL 证书（Let's Encrypt）
+# ============================================
+
+www.liumeihua.com {
+    redir https://liumeihua.com{uri} permanent
+}
+
+liumeihua.com {
+    reverse_proxy app:9900 {
+        # 支持 SSE 流式响应
+        flush_interval -1
+    }
+
+    # 上传文件大小限制
+    request_body {
+        max_size 50MB
+    }
+
+    # 日志
+    log {
+        output file /var/log/caddy/access.log
+    }
+
+    # Gzip 压缩
+    encode gzip
+
+    # 静态文件缓存
+    @static {
+        path /static/*
+    }
+    header @static Cache-Control "public, max-age=86400"
+}

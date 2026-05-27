@@ -1,0 +1,213 @@
+# ============================================
+# SuperBizAgent - 生产环境 Docker Compose
+# ============================================
+# 启动全部服务：docker compose --env-file .env.docker up -d
+# 查看日志：      docker compose logs -f app
+# 停止：          docker compose down
+# ============================================
+
+services:
+  # ──────────────────────────────────────────
+  # 反向代理：域名 + 自动 HTTPS
+  # ──────────────────────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    container_name: sba-caddy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+    networks:
+      - sba-net
+
+  # ──────────────────────────────────────────
+  # FastAPI 主应用
+  # ──────────────────────────────────────────
+  app:
+    build: .
+    container_name: sba-app
+    env_file:
+      - .env.docker
+    volumes:
+      # 持久化：数据库 + 上传文件 + 日志
+      - app_data:/app/data
+      - app_uploads:/app/uploads
+      - app_logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_started
+      milvus:
+        condition: service_healthy
+      mcp-cls:
+        condition: service_started
+      mcp-monitor:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - sba-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9900/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ──────────────────────────────────────────
+  # MCP CLS 日志服务
+  # ──────────────────────────────────────────
+  mcp-cls:
+    build: .
+    container_name: sba-mcp-cls
+    command: python mcp_servers/cls_server.py
+    env_file:
+      - .env.docker
+    restart: unless-stopped
+    networks:
+      - sba-net
+
+  # ──────────────────────────────────────────
+  # MCP Monitor 监控服务
+  # ──────────────────────────────────────────
+  mcp-monitor:
+    build: .
+    container_name: sba-mcp-monitor
+    command: python mcp_servers/monitor_server.py
+    env_file:
+      - .env.docker
+    restart: unless-stopped
+    networks:
+      - sba-net
+
+  # ──────────────────────────────────────────
+  # Redis 缓存
+  # ──────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: sba-redis
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    networks:
+      - sba-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ──────────────────────────────────────────
+  # Milvus 向量数据库 ─ 元数据存储
+  # ──────────────────────────────────────────
+  etcd:
+    container_name: milvus-etcd
+    image: quay.io/coreos/etcd:v3.5.18
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - etcd_data:/etcd
+    command: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - sba-net
+
+  # ──────────────────────────────────────────
+  # Milvus 向量数据库 ─ 对象存储
+  # ──────────────────────────────────────────
+  minio:
+    container_name: milvus-minio
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    volumes:
+      - minio_data:/minio_data
+    command: minio server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - sba-net
+
+  # ──────────────────────────────────────────
+  # Milvus 向量数据库 ─ 主服务
+  # ──────────────────────────────────────────
+  milvus:
+    container_name: milvus-standalone
+    image: milvusdb/milvus:v2.5.10
+    command: ["milvus", "run", "standalone"]
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+    volumes:
+      - milvus_data:/var/lib/milvus
+    ports:
+      - "19530:19530"
+    depends_on:
+      etcd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - sba-net
+
+  # ──────────────────────────────────────────
+  # Milvus Web UI（可选，调试用）
+  # ──────────────────────────────────────────
+  attu:
+    container_name: milvus-attu
+    image: zilliz/attu:v2.5
+    environment:
+      MILVUS_URL: milvus:19530
+    depends_on:
+      milvus:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - sba-net
+
+# ──────────────────────────────────────────
+# 数据卷
+# ──────────────────────────────────────────
+volumes:
+  caddy_data:
+  caddy_config:
+  app_data:
+  app_uploads:
+  app_logs:
+  redis_data:
+  etcd_data:
+  minio_data:
+  milvus_data:
+
+# ──────────────────────────────────────────
+# 网络
+# ──────────────────────────────────────────
+networks:
+  sba-net:
+    driver: bridge
